@@ -4,6 +4,6 @@
 'inpath': 'Data/Beta/imgdata.mat',
 'ctfpath': 'Data/Beta/defocus.txt',
 'microscope_params': {'akv':200,'wgh':0.07,'cs':2.0},
-'resolution': 1,
+'resolution': 3.54,
 'learn_like_envelope_bfactor': 500.0,
 }

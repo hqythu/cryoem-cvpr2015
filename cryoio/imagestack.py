@@ -123,7 +123,7 @@ class MATImageStack(ImageStackBase):
         ImageStackBase.__init__(self)
         self.stkfile = stkfile
         raw_imgdata = sio.loadmat(stkfile)['particleData']
-        hdr = {'zlen': 8915, 'xlen': 128, 'datatype': 2, 'nx': 128, 'ny': 128, 'nz': 8915, 'ylen': 128}
+        hdr = {'zlen': 31559.1, 'xlen': 226.56, 'datatype': 2, 'nx': 64, 'ny': 64, 'nz': 8915, 'ylen': 226.56}
 
         assert hdr['nx'] == hdr['ny']
 
