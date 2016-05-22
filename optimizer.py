@@ -416,8 +416,9 @@ class CryoOptimizer(BackgroundWorker):
 
         # optimization state vars ------------------------------------------
         init_model = self.cparams.get('init_model', None)
+        init_model = True
         if init_model is not None:
-            filename = init_model
+            filename = 'Data/Beta/init.mrc'
             if filename.upper().endswith('.MRC'):
                 M = readMRC(filename)
             else:
