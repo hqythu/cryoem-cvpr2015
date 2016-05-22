@@ -1,14 +1,12 @@
 import time, os, sys
 from datetime import datetime
-from cryoio.imagestack import MRCImageStack, CombinedImageStack
+from cryoio.imagestack import MRCImageStack, CombinedImageStack, MATImageStack
 from cryoio.ctfstack import CTFStack, CombinedCTFStack
 from cryoio.dataset import CryoDataset
 
-opj = os.path.join
 from copy import copy, deepcopy
 
 import numpy as n
-
 
 from shutil import copyfile
 from util import BackgroundWorker, Output, OutputStream, Params, format_timedelta, gitutil, FiniteRunningSum
@@ -30,8 +28,11 @@ from cryoio.mrc import writeMRC, readMRC
 from symmetry import get_symmetryop
 import density
 
+opj = os.path.join
+
+
 # precond should ideally be set to inv(chol(H)) where H is the Hessian
-def density2params(M,fM,xtype,grad_transform = False,precond = None):
+def density2params(M, fM, xtype, grad_transform=False, precond=None):
     if xtype == 'real':
         if grad_transform:
             x0 = M if precond is None else M * precond
@@ -48,7 +49,7 @@ def density2params(M,fM,xtype,grad_transform = False,precond = None):
         else:
             pfM = fM if precond is None else fM / precond
 
-        x0 = n.empty((2*fM.size,),dtype=density.real_t)
+        x0 = n.empty((2*fM.size,), dtype=density.real_t)
         x0[0:fM.size] = pfM.real.reshape((-1,))
         x0[fM.size:] = pfM.imag.reshape((-1,))
     elif xtype == 'complex_herm_coeff':
@@ -77,7 +78,7 @@ def density2params(M,fM,xtype,grad_transform = False,precond = None):
     return x0
 
 
-def param2density(x,xtype,sz,precond = None):
+def param2density(x, xtype, sz, precond=None):
     if xtype == 'real':
         M, fM = x.reshape(sz), None
         if precond is not None:
@@ -101,21 +102,20 @@ def param2density(x,xtype,sz,precond = None):
 
         N = sz[0]
         NC = N/2 + 1
-        startFreq = 1-(N%2)
-        zeroFreq = N/2
+        startFreq = 1 - (N % 2)
+        zeroFreq = N / 2
 
-        herm_freqs = n.empty((NC,N,N),dtype=density.complex_t)
-        herm_freqs.real = x[0:NC*N**2].reshape(herm_freqs.shape)
+        herm_freqs = n.empty((NC, N, N), dtype=density.complex_t)
+        herm_freqs.real = x[0: NC*N**2].reshape(herm_freqs.shape)
         herm_freqs.imag = x[NC*N**2:].reshape(herm_freqs.shape)
 
-        fM[0:NC,:,:] = herm_freqs
+        fM[0:NC, :, :] = herm_freqs
         if startFreq:
-            fM[NC:,:,:] = n.roll(n.roll(herm_freqs[startFreq:zeroFreq,:,:][::-1,::-1,::-1].conj(), \
-                                        1, axis=1), 1, axis=2)
+            fM[NC:, :, :] = n.roll(n.roll(herm_freqs[startFreq:zeroFreq, :, :][::-1, ::-1, ::-1].conj(), 1, axis=1), 1, axis=2)
         else:
-            fM[NC:,:,:] = herm_freqs[startFreq:zeroFreq,:,:][::-1,::-1,::-1].conj()
+            fM[NC:, :, :] = herm_freqs[startFreq:zeroFreq, :, :][::-1, ::-1, ::-1].conj()
 
-    return M,fM
+    return M, fM
 
 """
 This class is meant to wrap an objective function and deal with
@@ -123,18 +123,18 @@ reducing FFTs while allowing the optimizers to not need to know anything
 about the real-space versus fourier space (or whatever) parameterizations.
 """
 class ObjectiveWrapper:
-    def __init__(self,xtype,obj = None,arg_dict = None,precond = None):
+    def __init__(self, xtype, obj=None, arg_dict=None, precond=None):
         self.arg_dict = arg_dict if arg_dict is not None else {}
         self.objective = obj
         self.xtype = xtype
         self.precond = precond
 
-        assert xtype in ['real','complex','complex_coeff','complex_herm_coeff']
+        assert xtype in ['real', 'complex', 'complex_coeff', 'complex_herm_coeff']
 
     def require_fspace(self): 
-        return self.xtype in ['complex','complex_coeff','complex_herm_coeff']
+        return self.xtype in ['complex', 'complex_coeff', 'complex_herm_coeff']
 
-    def set_objective(self,obj,arg_dict = None):
+    def set_objective(self, obj, arg_dict=None):
         self.args = arg_dict if arg_dict is not None else {}
         self.objective = obj
 
@@ -146,12 +146,12 @@ class ObjectiveWrapper:
     def get_parameter(self):
         return self.x0
 
-    def convert_parameter(self,x,comp_real=False,comp_fspace=False):
+    def convert_parameter(self, x, comp_real=False, comp_fspace=False):
         is_x0 = x is self.x0
         if is_x0:
             M, fM = self.M0, self.fM0
         else:
-            M, fM = param2density(x, self.xtype, self.M0.shape, \
+            M, fM = param2density(x, self.xtype, self.M0.shape,
                                   precond=self.precond)
 
             if comp_real and M is None:
@@ -162,11 +162,11 @@ class ObjectiveWrapper:
                 
         return M, fM
 
-    def set_density(self,M0,fM0):
+    def set_density(self, M0, fM0):
         self.M0 = M0
         self.fM0 = fM0
 
-        self.x0 = density2params(M0,fM0,self.xtype,precond=self.precond)
+        self.x0 = density2params(M0, fM0, self.xtype, precond=self.precond)
 
         return self.x0
 
@@ -176,30 +176,29 @@ class ObjectiveWrapper:
         cargs = copy(self.args)
         cargs.update(kwargs)
         if cargs.get('compute_gradient',True):
-            logP,dlogP,outputs = self.objective.eval(M=M, fM=fM,
-                                                     **cargs)
+            logP, dlogP, outputs = self.objective.eval(M=M, fM=fM, **cargs)
         else:
-            logP,outputs = self.objective.eval(M=M, fM=fM,
-                                               **cargs)
-            return logP,outputs
+            logP, outputs = self.objective.eval(M=M, fM=fM, **cargs)
+            return logP, outputs
 
-        if self.xtype in ['complex_coeff','complex_herm_coeff'] :
-            if cargs.get('all_grads',False):
+        if self.xtype in ['complex_coeff', 'complex_herm_coeff'] :
+            if cargs.get('all_grads', False):
                 new_dlogPs = []
                 for adlogP in outputs['all_dlogPs']:
-                    new_dlogP = density2params(None,adlogP.reshape(fM.shape), \
-                                               self.xtype,grad_transform=True, \
+                    new_dlogP = density2params(None, adlogP.reshape(fM.shape),
+                                               self.xtype, grad_transform=True,
                                                precond=self.precond)
                     new_dlogPs.append(new_dlogP)
                 outputs['all_dlogPs'] = new_dlogPs
 
-            dlogP = density2params(None,dlogP.reshape(fM.shape),self.xtype, \
-                                   grad_transform=True,precond=self.precond)
+            dlogP = density2params(None, dlogP.reshape(fM.shape),self.xtype,
+                                   grad_transform=True, precond=self.precond)
 
-        return logP,dlogP.reshape(x.shape),outputs
-    
+        return logP, dlogP.reshape(x.shape), outputs
+
+
 class CryoOptimizer(BackgroundWorker):
-    def outputbatchinfo(self,batch,res,logP,prefix,name):
+    def outputbatchinfo(self, batch, res, logP, prefix, name):
         diag = {}
         stat = {}
         like = {}
@@ -213,7 +212,7 @@ class CryoOptimizer(BackgroundWorker):
         
         self.ostream('  {0} Batch:'.format(name))
 
-        for suff in ['R','I','S']:
+        for suff in ['R', 'I', 'S']:
             diag[prefix+'_CV2_'+suff] = res['CV2_'+suff]
 
         diag[prefix+'_idxs'] = batch['img_idxs']
@@ -222,10 +221,10 @@ class CryoOptimizer(BackgroundWorker):
         diag[prefix+'_power'] = res['power']
 
 #         self.ostream("    RMS Error: %g" % (sigma/n.sqrt(self.cryodata.noise_var)))
-        self.ostream("    RMS Error: %g, Signal: %g" % (sigma/n.sqrt(self.cryodata.noise_var), \
+        self.ostream("    RMS Error: %g, Signal: %g" % (sigma/n.sqrt(self.cryodata.noise_var),
                                                         sigma_prior/n.sqrt(self.cryodata.noise_var)))
-        self.ostream("    Effective # of R / I / S:     %.2f / %.2f / %.2f " %\
-                      (n.mean(res['CV2_R']), n.mean(res['CV2_I']),n.mean(res['CV2_S'])))
+        self.ostream("    Effective # of R / I / S:     %.2f / %.2f / %.2f "
+                     % (n.mean(res['CV2_R']), n.mean(res['CV2_I']), n.mean(res['CV2_S'])))
 
         # Importance Sampling Statistics
         is_speedups = []
@@ -244,7 +243,7 @@ class CryoOptimizer(BackgroundWorker):
                 lblstr += ' / ' + is_speedups[i][0]
                 numstr += ' / %.2f (%d of %d)' % is_speedups[i][1:]
             
-            self.ostream("    IS Speedup {0}: {1}".format(lblstr,numstr))
+            self.ostream("    IS Speedup {0}: {1}".format(lblstr, numstr))
 
         stat[prefix+'_sigma'] = [sigma]
         stat[prefix+'_logp'] = [logP]
@@ -256,7 +255,7 @@ class CryoOptimizer(BackgroundWorker):
         stat[prefix+'_cepoch'] = [cepoch],
         stat[prefix+'_time'] = [time.time()]
 
-        for k,v in res['like_timing'].iteritems():
+        for k, v in res['like_timing'].iteritems():
             stat[prefix+'_like_timing_'+k] = [v]
         
         Idxs = batch['img_idxs']
@@ -267,9 +266,9 @@ class CryoOptimizer(BackgroundWorker):
         keepidxs = self.cryodata.train_idxs if prefix == 'train' else self.cryodata.test_idxs
         keeplikes = self.img_likes[keepidxs]
         keeplikes = keeplikes[n.isfinite(keeplikes)]
-        quants = n.percentile(keeplikes, range(0,101))
+        quants = n.percentile(keeplikes, range(0, 101))
         stat[prefix+'_full_like_quantiles'] = [quants]
-        quants = n.percentile(res['like'], range(0,101))
+        quants = n.percentile(res['like'], range(0, 101))
         stat[prefix+'_mini_like_quantiles'] = [quants]
         stat[prefix+'_num_like_quantiles'] = [len(keeplikes)]
 
@@ -279,16 +278,16 @@ class CryoOptimizer(BackgroundWorker):
 
     def ioworker(self):
         while True:
-            iotype,fname,data = self.io_queue.get()
+            iotype, fname, data = self.io_queue.get()
             
             try:
                 if iotype == 'mrc':
-                    writeMRC(fname,*data)
+                    writeMRC(fname, *data)
                 elif iotype == 'pkl':
                     with open(fname, 'wb') as f:
                         cPickle.dump(data, f, protocol=-1)
                 elif iotype == 'cp':
-                    copyfile(fname,data)
+                    copyfile(fname, data)
             except:
                 print "ERROR DUMPING {0}: {1}".format(fname, sys.exc_info()[0])
                 
@@ -313,12 +312,12 @@ class CryoOptimizer(BackgroundWorker):
 
         # Paramter setup ---------------------------------------------------
         # search above expbase for params files
-        _,_,filenames = os.walk(opj(expbase,'../')).next()
-        self.paramfiles = [opj(opj(expbase,'../'), fname) \
+        _,_,filenames = os.walk(opj(expbase, '../')).next()
+        self.paramfiles = [opj(opj(expbase, '../'), fname)
                            for fname in filenames if fname.endswith('.params')]
         # search expbase for params files
         _,_,filenames = os.walk(opj(expbase)).next()
-        self.paramfiles += [opj(expbase,fname)  \
+        self.paramfiles += [opj(expbase, fname)
                             for fname in filenames if fname.endswith('.params')]
         if 'local.params' in filenames:
             self.paramfiles += [opj(expbase,'local.params')]
@@ -335,9 +334,10 @@ class CryoOptimizer(BackgroundWorker):
         self.imgpath = self.params['inpath']
         psize = self.params['resolution']
         if not isinstance(self.imgpath,list):
-            imgstk = MRCImageStack(self.imgpath,psize)
+            # imgstk = MRCImageStack(self.imgpath,psize)
+            imgstk = MATImageStack(self.imgpath, psize)
         else:
-            imgstk = CombinedImageStack([MRCImageStack(cimgpath,psize) for cimgpath in self.imgpath])
+            imgstk = CombinedImageStack([MRCImageStack(cimgpath, psize) for cimgpath in self.imgpath])
 
         if self.params.get('float_images',True):
             imgstk.float_images()
@@ -345,11 +345,10 @@ class CryoOptimizer(BackgroundWorker):
         self.ctfpath = self.params['ctfpath']
         mscope_params = self.params['microscope_params']
          
-        if not isinstance(self.ctfpath,list):
-            ctfstk = CTFStack(self.ctfpath,mscope_params)
+        if not isinstance(self.ctfpath, list):
+            ctfstk = CTFStack(self.ctfpath, mscope_params)
         else:
-            ctfstk = CombinedCTFStack([CTFStack(cctfpath,mscope_params) for cctfpath in self.ctfpath])
-
+            ctfstk = CombinedCTFStack([CTFStack(cctfpath, mscope_params) for cctfpath in self.ctfpath])
 
         self.cryodata = CryoDataset(imgstk,ctfstk)
         self.cryodata.compute_noise_statistics()
@@ -357,19 +356,19 @@ class CryoOptimizer(BackgroundWorker):
             imgstk.window_images()
         minibatch_size = self.params['minisize']
         testset_size = self.params['test_imgs']
-        partition = self.params.get('partition',0)
-        num_partitions = self.params.get('num_partitions',1)
+        partition = self.params.get('partition', 0)
+        num_partitions = self.params.get('num_partitions', 1)
         seed = self.params['random_seed']
-        if isinstance(partition,str):
+        if isinstance(partition, str):
             partition = eval(partition)
-        if isinstance(num_partitions,str):
+        if isinstance(num_partitions, str):
             num_partitions = eval(num_partitions)
-        if isinstance(seed,str):
+        if isinstance(seed, str):
             seed = eval(seed)
-        self.cryodata.divide_dataset(minibatch_size,testset_size,partition,num_partitions,seed)
+        self.cryodata.divide_dataset(minibatch_size, testset_size, partition, num_partitions, seed)
         
-        self.cryodata.set_datasign(self.params.get('datasign','auto'))
-        if self.params.get('normalize_data',True):
+        self.cryodata.set_datasign(self.params.get('datasign', 'auto'))
+        if self.params.get('normalize_data', True):
             self.cryodata.normalize_dataset()
 
         self.voxel_size = self.cryodata.pixel_size
@@ -381,23 +380,23 @@ class CryoOptimizer(BackgroundWorker):
         self.num_data_evals = 0
         self.eval_params()
 
-        outdir = self.cparams.get('outdir',None)
+        outdir = self.cparams.get('outdir', None)
         if outdir is None:
-            if self.cparams.get('num_partitions',1) > 1:
+            if self.cparams.get('num_partitions', 1) > 1:
                 outdir = 'partition{0}'.format(self.cparams['partition'])
             else:
                 outdir = ''
-        self.outbase = opj(self.expbase,outdir)
+        self.outbase = opj(self.expbase, outdir)
         if not os.path.isdir(self.outbase):
             os.makedirs(self.outbase) 
 
         # Output setup -----------------------------------------------------
-        self.ostream = OutputStream(opj(self.outbase,'stdout'))
+        self.ostream = OutputStream(opj(self.outbase, 'stdout'))
 
         self.ostream(80*"=")
-        self.ostream("Experiment: " + expbase + \
+        self.ostream("Experiment: " + expbase +
                      "    Kernel: " + self.params['kernel'])
-        self.ostream("Started on " + socket.gethostname() + \
+        self.ostream("Started on " + socket.gethostname() +
                      "    At: " + time.strftime('%B %d %Y: %I:%M:%S %p'))
         self.ostream("Git SHA1: " + gitutil.git_get_SHA1())
         self.ostream(80*"=")
@@ -406,17 +405,17 @@ class CryoOptimizer(BackgroundWorker):
 
 
         # for diagnostics and parameters
-        self.diagout = Output(opj(self.outbase, 'diag'),runningout=False)
+        self.diagout = Output(opj(self.outbase, 'diag'), runningout=False)
         # for stats (per image etc)
-        self.statout = Output(opj(self.outbase, 'stat'),runningout=True)
+        self.statout = Output(opj(self.outbase, 'stat'), runningout=True)
         # for likelihoods of individual images
-        self.likeout = Output(opj(self.outbase, 'like'),runningout=False)
+        self.likeout = Output(opj(self.outbase, 'like'), runningout=False)
 
         self.img_likes = n.empty(self.cryodata.N_D)
         self.img_likes[:] = n.inf
 
         # optimization state vars ------------------------------------------
-        init_model = self.cparams.get('init_model',None)
+        init_model = self.cparams.get('init_model', None)
         if init_model is not None:
             filename = init_model
             if filename.upper().endswith('.MRC'):
@@ -427,27 +426,27 @@ class CryoOptimizer(BackgroundWorker):
                     if type(M)==list:
                         M = M[-1]['M'] 
             if M.shape != 3*(self.cryodata.N,):
-                M = cryoem.resize_ndarray(M,3*(self.cryodata.N,),axes=(0,1,2))
+                M = cryoem.resize_ndarray(M, 3*(self.cryodata.N,), axes=(0, 1, 2))
         else:
             init_seed = self.cparams.get('init_random_seed',0)  + self.cparams.get('partition',0)
             print "Randomly generating initial density (init_random_seed = {0})...".format(init_seed), ; sys.stdout.flush()
             tic = time.time()
-            M = cryoem.generate_phantom_density(self.cryodata.N, 0.95*self.cryodata.N/2.0, \
+            M = cryoem.generate_phantom_density(self.cryodata.N, 0.95*self.cryodata.N/2.0,
                                                 5*self.cryodata.N/128.0, 30, seed=init_seed)
             print "done in {0}s".format(time.time() - tic)
 
         tic = time.time()
         print "Windowing and aligning initial density...", ; sys.stdout.flush()
         # window the initial density
-        wfunc = self.cparams.get('init_window','circle')
-        cryoem.window(M,wfunc)
+        wfunc = self.cparams.get('init_window', 'circle')
+        cryoem.window(M, wfunc)
 
         # Center and orient the initial density
         cryoem.align_density(M)
         print "done in {0:.2f}s".format(time.time() - tic)
 
         # apply the symmetry operator
-        init_sym = get_symmetryop(self.cparams.get('init_symmetry',self.cparams.get('symmetry',None)))
+        init_sym = get_symmetryop(self.cparams.get('init_symmetry', self.cparams.get('symmetry',None)))
         if init_sym is not None:
             tic = time.time()
             print "Applying symmetry operator...", ; sys.stdout.flush()
@@ -456,7 +455,7 @@ class CryoOptimizer(BackgroundWorker):
 
         tic = time.time()
         print "Scaling initial model...", ; sys.stdout.flush()
-        modelscale = self.cparams.get('modelscale','auto')
+        modelscale = self.cparams.get('modelscale', 'auto')
         mleDC, _, mleDC_est_std = self.cryodata.get_dc_estimate()
         if modelscale == 'auto':
             # Err on the side of a weaker prior by using a larger value for modelscale
@@ -479,20 +478,20 @@ class CryoOptimizer(BackgroundWorker):
         self.step.setup(self.cparams, self.diagout, self.statout, self.ostream)
 
         # Objective function setup --------------------------------------------
-        param_type = self.cparams.get('parameterization','real')
-        cplx_param = param_type in ['complex','complex_coeff','complex_herm_coeff']
+        param_type = self.cparams.get('parameterization', 'real')
+        cplx_param = param_type in ['complex','complex_coeff', 'complex_herm_coeff']
         self.like_func = eval_objective(self.cparams['likelihood'])
         self.prior_func = eval_objective(self.cparams['prior'])
 
         if self.cparams.get('penalty',None) is not None:
             self.penalty_func = eval_objective(self.cparams['penalty'])
-            prior_func = SumObjectives(self.prior_func.fspace, \
+            prior_func = SumObjectives(self.prior_func.fspace,
                                        [self.penalty_func,self.prior_func], None)
         else:
             prior_func = self.prior_func
 
         self.obj = SumObjectives(cplx_param,
-                                 [self.like_func,prior_func], [None,None])
+                                 [self.like_func, prior_func], [None, None])
         self.obj.setup(self.cparams, self.diagout, self.statout, self.ostream)
         self.obj.set_dataset(self.cryodata)
         self.obj_wrapper = ObjectiveWrapper(param_type)
@@ -503,11 +502,11 @@ class CryoOptimizer(BackgroundWorker):
         self.like_history = FiniteRunningSum()
 
         # Importance Samplers -------------------------------------------------
-        self.is_sym = get_symmetryop(self.cparams.get('is_symmetry',self.cparams.get('symmetry',None)))
-        self.sampler_R = FixedFisherImportanceSampler('_R',self.is_sym)
+        self.is_sym = get_symmetryop(self.cparams.get('is_symmetry',self.cparams.get('symmetry', None)))
+        self.sampler_R = FixedFisherImportanceSampler('_R', self.is_sym)
         self.sampler_I = FixedFisherImportanceSampler('_I')
         self.sampler_S = FixedGaussianImportanceSampler('_S')
-        self.like_func.set_samplers(sampler_R=self.sampler_R,sampler_I=self.sampler_I,sampler_S=self.sampler_S)
+        self.like_func.set_samplers(sampler_R=self.sampler_R, sampler_I=self.sampler_I, sampler_S=self.sampler_S)
 
     def eval_params(self):
         # cvars are state variables that can be used in parameter expressions
@@ -527,17 +526,17 @@ class CryoOptimizer(BackgroundWorker):
         # expressions, they can only depend on values defined in cvars
         prelist = ['max_frequency']
         
-        skipfields = set(['inpath','ctfpath'])
+        skipfields = set(['inpath', 'ctfpath'])
 
-        cvars = self.params.partial_evaluate(prelist,**cvars)
+        cvars = self.params.partial_evaluate(prelist, **cvars)
         if self.cparams is None:
             self.max_frequency_changes = 0
         else:
             self.max_frequency_changes += cvars['max_frequency'] != cvars['prev_max_frequency']
                 
-        cvars['num_max_frequency_changes'] =  self.max_frequency_changes
+        cvars['num_max_frequency_changes'] = self.max_frequency_changes
         cvars['max_frequency_changed'] = cvars['max_frequency'] != cvars['prev_max_frequency']
-        self.cparams = self.params.evaluate(skipfields,**cvars)
+        self.cparams = self.params.evaluate(skipfields, **cvars)
 
         self.cparams['exp_path'] = self.expbase
         self.cparams['out_path'] = self.outbase
@@ -547,9 +546,9 @@ class CryoOptimizer(BackgroundWorker):
 
     def run(self):
         while self.dowork(): pass
-        print "Waiting for IO queue to clear...",  ; sys.stdout.flush()
+        print "Waiting for IO queue to clear...", ; sys.stdout.flush()
         self.io_queue.join()
-        print "done."  ; sys.stdout.flush()
+        print "done." ; sys.stdout.flush()
 
     def begin(self):
         BackgroundWorker.begin(self)
@@ -579,36 +578,36 @@ class CryoOptimizer(BackgroundWorker):
         timing['setup'] = time.time() - tic_mini
 
         # Do hyperparameter learning
-        if self.cparams.get('learn_params',False):
+        if self.cparams.get('learn_params', False):
             tic_learn = time.time()
-            if self.cparams.get('learn_prior_params',True):
+            if self.cparams.get('learn_prior_params', True):
                 tic_learn_prior = time.time()
                 self.prior_func.learn_params(self.params, self.cparams, M=self.M, fM=self.fM)
                 timing['learn_prior'] = time.time() - tic_learn_prior 
 
-            if self.cparams.get('learn_likelihood_params',True):
+            if self.cparams.get('learn_likelihood_params', True):
                 tic_learn_like = time.time()
                 self.like_func.learn_params(self.params, self.cparams, M=self.M, fM=self.fM)
                 timing['learn_like'] = time.time() - tic_learn_like
                 
-            if self.cparams.get('learn_prior_params',True) or self.cparams.get('learn_likelihood_params',True):
+            if self.cparams.get('learn_prior_params', True) or self.cparams.get('learn_likelihood_params', True):
                 timing['learn_total'] = time.time() - tic_learn   
 
         # Time each epoch
         if self.tic_epoch == None:
             self.ostream("Epoch: %d" % epoch)
-            self.tic_epoch = (tic_mini,epoch)
+            self.tic_epoch = (tic_mini, epoch)
         elif self.tic_epoch[1] != epoch:
             self.ostream("Epoch Total - %.6f seconds " % \
                          (tic_mini - self.tic_epoch[0]))
-            self.tic_epoch = (tic_mini,epoch)
+            self.tic_epoch = (tic_mini, epoch)
 
         sym = get_symmetryop(self.cparams.get('symmetry',None))
         if sym is not None:
             self.obj.ws[1] = 1.0/sym.get_order()
 
         tic_mstats = time.time()
-        self.ostream(self.cparams['name']," Iteration:", self.iteration,\
+        self.ostream(self.cparams['name'], " Iteration:", self.iteration,
                      " Epoch:", epoch, " Host:", socket.gethostname())
 
         # Compute density statistics
@@ -629,7 +628,7 @@ class CryoOptimizer(BackgroundWorker):
         timing['density_stats'] = time.time() - tic_mstats
 
         # evaluate test batch if requested
-        if self.iteration <= 1 or self.cparams.get('evaluate_test_set',self.iteration%5):
+        if self.iteration <= 1 or self.cparams.get('evaluate_test_set', self.iteration % 5):
             tic_test = time.time()
             testbatch = self.cryodata.get_testbatch()
 
@@ -646,18 +645,19 @@ class CryoOptimizer(BackgroundWorker):
         tic_objsetup = time.time()
         self.obj.set_data(self.cparams,trainbatch)
         self.obj_wrapper.set_objective(self.obj)
-        x0 = self.obj_wrapper.set_density(self.M,self.fM)
+        x0 = self.obj_wrapper.set_density(self.M, self.fM)
         evalobj = self.obj_wrapper.eval_obj
         timing['obj_setup'] = time.time() - tic_objsetup
 
         # Get step size
         self.num_data_evals += trainbatch['N_M']  # at least one gradient
         tic_objstep = time.time()
-        trainLogP, dlogP, v, res_train, extra_num_data = self.step.do_step(x0,
-                                                         self.cparams,
-                                                         self.cryodata,
-                                                         evalobj,
-                                                         batch=trainbatch)
+        trainLogP, dlogP, v, res_train, extra_num_data = self.step.do_step(
+            x0,
+            self.cparams,
+            self.cryodata,
+            evalobj,
+            batch=trainbatch)
 
         # Apply the step
         x = x0 + v
@@ -668,23 +668,23 @@ class CryoOptimizer(BackgroundWorker):
         prevM = n.copy(self.M)
         self.M, self.fM = self.obj_wrapper.convert_parameter(x,comp_real=True)
  
-        apply_sym = sym is not None and self.cparams.get('perfect_symmetry',True) and self.cparams.get('apply_symmetry',True)
+        apply_sym = sym is not None and self.cparams.get('perfect_symmetry', True) and self.cparams.get('apply_symmetry', True)
         if apply_sym:
             self.M = sym.apply(self.M)
 
         # Truncate the density to bounds if they exist
         if self.cparams['density_lb'] is not None:
-            n.maximum(self.M,self.cparams['density_lb']*self.cparams['modelscale'],out=self.M)
+            n.maximum(self.M, self.cparams['density_lb']*self.cparams['modelscale'], out=self.M)
         if self.cparams['density_ub'] is not None:
-            n.minimum(self.M,self.cparams['density_ub']*self.cparams['modelscale'],out=self.M)
+            n.minimum(self.M, self.cparams['density_ub']*self.cparams['modelscale'], out=self.M)
 
         # Compute net change
         self.dM = prevM - self.M
 
         # Convert to fourier space (may not be required)
         if self.fM is None or apply_sym \
-           or self.cparams['density_lb'] != None \
-           or self.cparams['density_ub'] != None:
+           or self.cparams['density_lb'] is not None \
+           or self.cparams['density_ub'] is not None:
             self.fM = density.real_to_fspace(self.M)
         timing['step_finalize'] = time.time() - tic_stepfinalize
 
@@ -719,12 +719,12 @@ class CryoOptimizer(BackgroundWorker):
         self.diagout.output(iteration=self.iteration, epoch=epoch, cepoch=cepoch)
 
         if self.logpost_history.N_sum != self.cryodata.N_batches:
-            self.logpost_history.setup(trainLogP,self.cryodata.N_batches)
-        self.logpost_history.set_value(trainbatch['id'],trainLogP)
+            self.logpost_history.setup(trainLogP, self.cryodata.N_batches)
+        self.logpost_history.set_value(trainbatch['id'], trainLogP)
 
         if self.like_history.N_sum != self.cryodata.N_batches:
-            self.like_history.setup(res_train['L'],self.cryodata.N_batches)
-        self.like_history.set_value(trainbatch['id'],res_train['L'])
+            self.like_history.setup(res_train['L'], self.cryodata.N_batches)
+        self.like_history.set_value(trainbatch['id'], res_train['L'])
 
         self.outputbatchinfo(trainbatch, res_train, trainLogP, 'train', 'Train')
 
@@ -744,9 +744,9 @@ class CryoOptimizer(BackgroundWorker):
                             time=[time.time()])
         timing['diagnostics'] = time.time() - tic_diagnostics
 
-        checkpoint_it = self.iteration % self.cparams.get('checkpoint_frequency',50) == 0 
+        checkpoint_it = self.iteration % self.cparams.get('checkpoint_frequency', 50) == 0
         save_it = checkpoint_it or self.cparams['save_iteration'] or \
-                  time.time() - self.last_save > self.cparams.get('save_time',n.inf)
+                  time.time() - self.last_save > self.cparams.get('save_time', n.inf)
                   
         if save_it:
             tic_save = time.time()
@@ -754,26 +754,23 @@ class CryoOptimizer(BackgroundWorker):
             if self.io_queue.qsize():
                 print "Warning: IO queue has become backlogged with {0} remaining, waiting for it to clear".format(self.io_queue.qsize())
                 self.io_queue.join()
-            self.io_queue.put(( 'pkl', self.statout.fname, copy(self.statout.outdict) ))
-            self.io_queue.put(( 'pkl', self.diagout.fname, deepcopy(self.diagout.outdict) ))
-            self.io_queue.put(( 'pkl', self.likeout.fname, deepcopy(self.likeout.outdict) ))
-            self.io_queue.put(( 'mrc', opj(self.outbase,'model.mrc'), \
-                                (n.require(self.M,dtype=density.real_t),self.voxel_size) ))
-            self.io_queue.put(( 'mrc', opj(self.outbase,'dmodel.mrc'), \
-                                (n.require(self.dM,dtype=density.real_t),self.voxel_size) ))
+            self.io_queue.put(('pkl', self.statout.fname, copy(self.statout.outdict)))
+            self.io_queue.put(('pkl', self.diagout.fname, deepcopy(self.diagout.outdict)))
+            self.io_queue.put(('pkl', self.likeout.fname, deepcopy(self.likeout.outdict)))
+            self.io_queue.put(('mrc', opj(self.outbase, 'model.mrc'),
+                              (n.require(self.M, dtype=density.real_t), self.voxel_size)))
+            self.io_queue.put(('mrc', opj(self.outbase, 'dmodel.mrc'),
+                              (n.require(self.dM, dtype=density.real_t), self.voxel_size)))
 
             if checkpoint_it:
-                self.io_queue.put(( 'cp', self.diagout.fname, self.diagout.fname+'-{0:06}'.format(self.iteration) ))
-                self.io_queue.put(( 'cp', self.likeout.fname, self.likeout.fname+'-{0:06}'.format(self.iteration) ))
-                self.io_queue.put(( 'cp', opj(self.outbase,'model.mrc'), opj(self.outbase,'model-{0:06}.mrc'.format(self.iteration)) ))
+                self.io_queue.put(('cp', self.diagout.fname, self.diagout.fname+'-{0:06}'.format(self.iteration)))
+                self.io_queue.put(('cp', self.likeout.fname, self.likeout.fname+'-{0:06}'.format(self.iteration)))
+                self.io_queue.put(('cp', opj(self.outbase, 'model.mrc'), opj(self.outbase, 'model-{0:06}.mrc'.format(self.iteration))))
             timing['save'] = time.time() - tic_save
-                
-            
+
         time_total = time.time() - tic_mini
         self.ostream("  Minibatch Total - %.2f seconds                         Total Runtime - %s" %
-                     (time_total, format_timedelta(datetime.now() - self.startdatetime) ))
+                     (time_total, format_timedelta(datetime.now() - self.startdatetime)))
 
-        
-        return self.iteration < self.cparams.get('max_iterations',n.inf) and \
-               cepoch < self.cparams.get('max_epochs',n.inf)
-       
+        return self.iteration < self.cparams.get('max_iterations', n.inf) and \
+               cepoch < self.cparams.get('max_epochs', n.inf)

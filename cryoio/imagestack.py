@@ -5,6 +5,7 @@ from cryoem import resize_ndarray
 from threading import Lock
 
 import numpy as n
+import scipy.io as sio
 
 class ImageStackBase:
     def __init__(self):
@@ -114,6 +115,46 @@ class MRCImageStack(ImageStackBase):
         return self.imgdata.__iter__()
 
     def get_image(self,idx):
+        return self.imgdata[idx]
+
+
+class MATImageStack(ImageStackBase):
+    def __init__(self, stkfile, psz, scale=1.0):
+        ImageStackBase.__init__(self)
+        self.stkfile = stkfile
+        raw_imgdata = sio.loadmat(stkfile)['particleData']
+        hdr = {'zlen': 112000.0, 'xlen': 358.39999, 'datatype': 2, 'nx': 128, 'ny': 128, 'nz': 40000, 'ylen': 358.39999}
+
+        assert hdr['nx'] == hdr['ny']
+
+        if psz is None:
+            assert hdr['xlen'] == hdr['ylen']
+            psz = hdr['xlen'] / hdr['nx']
+            print 'No pixel size specified, using the one defined by the MRC header: {0}A'.format(psz)
+            print '   WARNING: This may be inaccurate!'
+
+        if scale != 1.0:
+            Nsz = [n.round(scale * raw_imgdata.shape[0]),
+                   n.round(scale * raw_imgdata.shape[1]),
+                   raw_imgdata.shape[2]]
+            imgdata = resize_ndarray(raw_imgdata, Nsz, axes=(0, 1))
+            self.pixel_size = (psz * raw_imgdata.shape[0]) / imgdata.shape[1]
+        else:
+            imgdata = raw_imgdata
+            self.pixel_size = psz
+
+        self.imgdata = n.transpose(imgdata, axes=(2, 0, 1))
+
+        self.num_images = self.imgdata.shape[0]
+        self.num_pixels = self.imgdata.shape[1]
+
+    def scale_images(self, scale):
+        self.imgdata *= scale
+
+    def __iter__(self):
+        return self.imgdata.__iter__()
+
+    def get_image(self, idx):
         return self.imgdata[idx]
 
 

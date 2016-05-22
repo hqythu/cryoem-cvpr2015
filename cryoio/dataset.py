@@ -15,7 +15,8 @@ class CryoDataset:
     def __init__(self,imgstack,ctfstack):
         self.imgstack = imgstack
         self.ctfstack = ctfstack
-        
+
+        print self.imgstack.get_num_images(), self.ctfstack.get_num_images()
         assert self.imgstack.get_num_images() == self.ctfstack.get_num_images()
         
         self.N = self.imgstack.get_num_pixels()
