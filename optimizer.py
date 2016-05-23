@@ -16,6 +16,7 @@ from importancesampler.gaussian import FixedGaussianImportanceSampler
 from importancesampler.fisher import FixedFisherImportanceSampler
 import cPickle
 import socket
+import scipy.io as sio
 
 from threading import Thread
 from Queue import Queue
@@ -416,11 +417,13 @@ class CryoOptimizer(BackgroundWorker):
 
         # optimization state vars ------------------------------------------
         init_model = self.cparams.get('init_model', None)
-        init_model = True
+        # init_model = True
         if init_model is not None:
-            filename = 'Data/Beta/init.mrc'
+            filename = 'Data/Beta/init.mat'
             if filename.upper().endswith('.MRC'):
                 M = readMRC(filename)
+            elif filename.upper().endswith('.MAT'):
+                M = sio.loadmat(filename)['init']
             else:
                 with open(filename) as fp:
                     M = cPickle.load(fp)
